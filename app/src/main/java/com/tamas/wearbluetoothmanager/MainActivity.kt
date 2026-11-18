@@ -27,7 +27,7 @@ import android.widget.TextView
 import android.widget.Toast
 
 class MainActivity : Activity() {
-    private data class FoundDevice(val device: BluetoothDevice, var source: String)
+    private data class FoundDevice(val device: BluetoothDevice, var source: String, var displayName: String?)
 
     private val found = linkedMapOf<String, FoundDevice>()
     private lateinit var root: LinearLayout
@@ -47,10 +47,11 @@ class MainActivity : Activity() {
 
     private val leCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            addDevice(result.device, "BLE")
+            // BLE advertisement packets can expose a local name even when device.name is still null.
+            addDevice(result.device, "BLE", result.scanRecord?.deviceName)
         }
         override fun onBatchScanResults(results: MutableList<ScanResult>) {
-            results.forEach { addDevice(it.device, "BLE") }
+            results.forEach { addDevice(it.device, "BLE", it.scanRecord?.deviceName) }
         }
         override fun onScanFailed(errorCode: Int) {
             runOnUiThread { refreshStatus("BLE keresési hiba: $errorCode") }
@@ -60,14 +61,17 @@ class MainActivity : Activity() {
     private val btReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
-                BluetoothDevice.ACTION_FOUND -> {
+                BluetoothDevice.ACTION_FOUND, BluetoothDevice.ACTION_NAME_CHANGED -> {
                     val device = if (Build.VERSION.SDK_INT >= 33) {
                         intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
                     } else {
                         @Suppress("DEPRECATION")
                         intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                     }
-                    device?.let { addDevice(it, "Classic") }
+                    val broadcastName = intent.getStringExtra(BluetoothDevice.EXTRA_NAME)
+                    device?.let {
+                        addDevice(it, if (intent.action == BluetoothDevice.ACTION_NAME_CHANGED) "Név frissítve" else "Classic", broadcastName)
+                    }
                 }
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
                     refreshStatus("Classic keresés kész · ${found.size} eszköz")
@@ -143,6 +147,7 @@ class MainActivity : Activity() {
     private fun registerBluetoothReceiver() {
         val filter = IntentFilter().apply {
             addAction(BluetoothDevice.ACTION_FOUND)
+            addAction(BluetoothDevice.ACTION_NAME_CHANGED)
             addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
             addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
         }
@@ -211,13 +216,21 @@ class MainActivity : Activity() {
         handler.postDelayed({ scanButton.isEnabled = true }, 15_500L)
     }
 
-    private fun addDevice(device: BluetoothDevice, source: String) {
+    private fun addDevice(device: BluetoothDevice, source: String, advertisedName: String? = null) {
         runOnUiThread {
             try {
                 val key = device.address ?: return@runOnUiThread
+                // Prefer a useful advertised/broadcast name, then the system's cached remote name.
+                val systemName = try { device.name } catch (_: SecurityException) { null }
+                val candidateName = advertisedName?.takeIf { it.isNotBlank() }
+                    ?: systemName?.takeIf { it.isNotBlank() }
                 val old = found[key]
-                if (old == null) found[key] = FoundDevice(device, source)
-                else if (!old.source.contains(source)) old.source += " + $source"
+                if (old == null) {
+                    found[key] = FoundDevice(device, source, candidateName)
+                } else {
+                    if (!old.source.contains(source)) old.source += " + $source"
+                    if (!candidateName.isNullOrBlank()) old.displayName = candidateName
+                }
                 renderDevices()
             } catch (_: SecurityException) {
                 refreshStatus("A Bluetooth Connect engedély hiányzik.")
@@ -228,7 +241,15 @@ class MainActivity : Activity() {
     private fun refreshPairedDevices() {
         if (!hasPermissions()) return
         try {
-            adapter?.bondedDevices?.forEach { found[it.address] = FoundDevice(it, "Párosított") }
+            adapter?.bondedDevices?.forEach {
+                val name = try { it.name?.takeIf { value -> value.isNotBlank() } } catch (_: SecurityException) { null }
+                val existing = found[it.address]
+                if (existing == null) found[it.address] = FoundDevice(it, "Párosított", name)
+                else {
+                    existing.displayName = name ?: existing.displayName
+                    if (!existing.source.contains("Párosított")) existing.source += " + Párosított"
+                }
+            }
             renderDevices()
         } catch (_: SecurityException) { }
     }
@@ -247,7 +268,10 @@ class MainActivity : Activity() {
         }
         found.values.forEach { item ->
             val device = item.device
-            val name = try { device.name ?: "Ismeretlen eszköz" } catch (_: SecurityException) { "Bluetooth eszköz" }
+            val name = item.displayName?.takeIf { it.isNotBlank() }
+                ?: try { device.name?.takeIf { it.isNotBlank() } ?: "Név még nem érhető el" }
+                catch (_: SecurityException) { "Bluetooth eszköz" }
+            val address = try { device.address } catch (_: SecurityException) { "Nem elérhető" }
             val bond = try {
                 when (device.bondState) {
                     BluetoothDevice.BOND_BONDED -> "Párosítva"
@@ -265,6 +289,11 @@ class MainActivity : Activity() {
                 textSize = 14f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(0xFFFFFFFF.toInt())
+            })
+            row.addView(TextView(this).apply {
+                text = address
+                textSize = 10f
+                setTextColor(0xFF80CBC4.toInt())
             })
             row.addView(TextView(this).apply {
                 text = "$bond · ${item.source}"
