@@ -166,6 +166,13 @@ class MainActivity : Activity() {
         }
         root.addView(stopButton, match())
 
+        val keyboardSettingsButton = Button(this).apply {
+            text = "FIZIKAI BILLENTYŰZET BEÁLLÍTÁSAI"
+            isAllCaps = false
+            setOnClickListener { openPhysicalKeyboardSettings() }
+        }
+        root.addView(keyboardSettingsButton, match())
+
         root.addView(TextView(this).apply {
             text = "Talált eszközök"
             textSize = 15f
@@ -183,6 +190,23 @@ class MainActivity : Activity() {
             setTextColor(0xFF9E9E9E.toInt())
             setPadding(0, dp(14), 0, 0)
         }, match())
+    }
+
+    /** Opens Android's standard hardware-keyboard layout screen when the ROM provides it. */
+    private fun openPhysicalKeyboardSettings() {
+        try {
+            startActivity(Intent(android.provider.Settings.ACTION_HARD_KEYBOARD_SETTINGS))
+        } catch (_: android.content.ActivityNotFoundException) {
+            // Some Wear OS builds omit the dedicated physical-keyboard settings screen.
+            try {
+                startActivity(Intent(android.provider.Settings.ACTION_SETTINGS))
+                Toast.makeText(this, "A fizikai billentyűzet beállításai ezen a Wear OS-verzión nem érhetők el közvetlenül.", Toast.LENGTH_LONG).show()
+            } catch (_: Exception) {
+                Toast.makeText(this, "A rendszerbeállítások nem nyithatók meg ezen az órán.", Toast.LENGTH_LONG).show()
+            }
+        } catch (_: SecurityException) {
+            Toast.makeText(this, "A rendszer nem engedélyezi a billentyűzet-beállítások megnyitását.", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun registerBluetoothReceiver() {
