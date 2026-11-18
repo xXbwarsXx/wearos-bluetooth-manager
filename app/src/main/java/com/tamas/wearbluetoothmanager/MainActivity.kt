@@ -20,7 +20,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
-import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -31,31 +30,54 @@ class MainActivity : Activity() {
     private data class FoundDevice(val device: BluetoothDevice, var source: String, var displayName: String?)
 
     private val found = linkedMapOf<String, FoundDevice>()
-    private lateinit var root: LinearLayout
     private lateinit var status: TextView
     private lateinit var list: LinearLayout
-    private lateinit var scanButton: Button
+    private lateinit var bleButton: Button
+    private lateinit var classicButton: Button
+    private lateinit var stopButton: Button
     private var adapter: BluetoothAdapter? = null
     private var leScanner: BluetoothLeScanner? = null
     private var receiverRegistered = false
+    private var bleRunning = false
+    private var classicRunning = false
     private val handler = Handler(Looper.getMainLooper())
 
-    private val stopBle = Runnable {
-        try { leScanner?.stopScan(leCallback) } catch (_: SecurityException) { }
-        refreshStatus("Keresés befejezve · ${found.size} eszköz")
-        renderDevices()
+    // Device discoveries can arrive many times per second. Batch UI work to avoid
+    // repeatedly rebuilding the entire Wear OS screen for every advertisement.
+    private val renderRunnable = Runnable { renderDevices() }
+    private fun scheduleRender() {
+        handler.removeCallbacks(renderRunnable)
+        handler.postDelayed(renderRunnable, 450L)
+    }
+
+    private val bleTimeout = Runnable {
+        stopBleScan()
+        updateControls()
+        refreshStatus("BLE keresés kész · ${found.size} eszköz")
+        scheduleRender()
+    }
+
+    private val classicTimeout = Runnable {
+        stopClassicScan()
+        updateControls()
+        refreshStatus("Classic keresés időkorlátja lejárt · ${found.size} eszköz")
+        scheduleRender()
     }
 
     private val leCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            // BLE advertisement packets can expose a local name even when device.name is still null.
             addDevice(result.device, "BLE", result.scanRecord?.deviceName)
         }
         override fun onBatchScanResults(results: MutableList<ScanResult>) {
             results.forEach { addDevice(it.device, "BLE", it.scanRecord?.deviceName) }
         }
         override fun onScanFailed(errorCode: Int) {
-            runOnUiThread { refreshStatus("BLE keresési hiba: $errorCode") }
+            runOnUiThread {
+                bleRunning = false
+                handler.removeCallbacks(bleTimeout)
+                updateControls()
+                refreshStatus("BLE keresési hiba: $errorCode")
+            }
         }
     }
 
@@ -75,10 +97,13 @@ class MainActivity : Activity() {
                     }
                 }
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
+                    classicRunning = false
+                    handler.removeCallbacks(classicTimeout)
+                    updateControls()
                     refreshStatus("Classic keresés kész · ${found.size} eszköz")
-                    renderDevices()
+                    scheduleRender()
                 }
-                BluetoothDevice.ACTION_BOND_STATE_CHANGED -> renderDevices()
+                BluetoothDevice.ACTION_BOND_STATE_CHANGED -> scheduleRender()
             }
         }
     }
@@ -94,9 +119,9 @@ class MainActivity : Activity() {
 
     private fun buildUi() {
         val scroll = ScrollView(this)
-        root = LinearLayout(this).apply {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(22), dp(18), dp(24))
+            setPadding(dp(16), dp(18), dp(16), dp(22))
             setBackgroundColor(0xFF000000.toInt())
         }
         scroll.addView(root)
@@ -104,7 +129,7 @@ class MainActivity : Activity() {
 
         root.addView(TextView(this).apply {
             text = "Wear Bluetooth\nManager"
-            textSize = 23f
+            textSize = 22f
             setTextColor(0xFFFFFFFF.toInt())
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -115,33 +140,48 @@ class MainActivity : Activity() {
             textSize = 12f
             setTextColor(0xFFBDBDBD.toInt())
             gravity = Gravity.CENTER
-            setPadding(0, dp(12), 0, dp(12))
+            setPadding(0, dp(10), 0, dp(10))
         }
         root.addView(status, match())
 
-        scanButton = Button(this).apply {
-            text = "ESZKÖZÖK KERESÉSE"
+        bleButton = Button(this).apply {
+            text = "BLE KERESÉS"
             isAllCaps = false
-            setOnClickListener { beginScan() }
+            setOnClickListener { beginBleScan() }
         }
-        root.addView(scanButton, match())
+        root.addView(bleButton, match())
+
+        classicButton = Button(this).apply {
+            text = "CLASSIC KERESÉS"
+            isAllCaps = false
+            setOnClickListener { beginClassicScan() }
+        }
+        root.addView(classicButton, match())
+
+        stopButton = Button(this).apply {
+            text = "KERESÉS LEÁLLÍTÁSA"
+            isAllCaps = false
+            isEnabled = false
+            setOnClickListener { stopAllScans("Keresés kézzel leállítva") }
+        }
+        root.addView(stopButton, match())
 
         root.addView(TextView(this).apply {
             text = "Talált eszközök"
             textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(0xFF80CBC4.toInt())
-            setPadding(0, dp(18), 0, dp(8))
+            setPadding(0, dp(14), 0, dp(7))
         }, match())
 
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(list, match())
 
         root.addView(TextView(this).apply {
-            text = "Tipp: a billentyűzetet párosítási módba kell kapcsolni. A keresés Classic és BLE eszközöket is listáz."
-            textSize = 11f
+            text = "A BLE és a Classic keresés külön indítható. A Classic keresés rövidebb ideig fut, mert jobban terhelheti az órát. Bármikor leállíthatod."
+            textSize = 10f
             setTextColor(0xFF9E9E9E.toInt())
-            setPadding(0, dp(18), 0, 0)
+            setPadding(0, dp(14), 0, 0)
         }, match())
     }
 
@@ -152,9 +192,8 @@ class MainActivity : Activity() {
             addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
             addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
         }
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(btReceiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(btReceiver, filter, Context.RECEIVER_EXPORTED)
+        else {
             @Suppress("DEPRECATION")
             registerReceiver(btReceiver, filter)
         }
@@ -171,9 +210,7 @@ class MainActivity : Activity() {
         checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun requestBluetoothPermissions() {
-        requestPermissions(requiredPermissions(), 100)
-    }
+    private fun requestBluetoothPermissions() = requestPermissions(requiredPermissions(), 100)
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -181,65 +218,122 @@ class MainActivity : Activity() {
         else refreshStatus("A Bluetooth- és helyengedélyek szükségesek a kereséshez.")
     }
 
-    private fun beginScan() {
+    private fun readyAdapter(): BluetoothAdapter? {
         if (!hasPermissions()) {
             requestBluetoothPermissions()
-            return
+            return null
         }
         val bt = adapter
         if (bt == null) {
             refreshStatus("Ez az eszköz nem rendelkezik Bluetooth-adapterrel.")
-            return
+            return null
         }
         if (!bt.isEnabled) {
             startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
             refreshStatus("Kapcsold be a Bluetooth-t, majd indítsd újra a keresést.")
-            return
+            return null
         }
+        return bt
+    }
 
-        found.clear()
-        renderDevices()
-        scanButton.isEnabled = false
-        refreshStatus("Keresés folyamatban…")
+    private fun beginBleScan() {
+        val bt = readyAdapter() ?: return
+        stopAllScans(null)
         try {
-            if (bt.isDiscovering) bt.cancelDiscovery()
-            val classicStarted = bt.startDiscovery()
+            found.clear()
+            renderDevices()
             leScanner = bt.bluetoothLeScanner
-            val scanSettings = ScanSettings.Builder()
-                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-                .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
-                .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
-                .setNumOfMatches(ScanSettings.MATCH_NUM_MAX_ADVERTISEMENT)
+            val settings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
                 .setReportDelay(0L)
                 .build()
-            leScanner?.startScan(null, scanSettings, leCallback)
-            handler.removeCallbacks(stopBle)
-            handler.postDelayed(stopBle, 25_000L)
-            if (!classicStarted) refreshStatus("BLE keresés fut; Classic keresés nem indult el.")
+            leScanner?.startScan(null, settings, leCallback)
+            bleRunning = true
+            handler.postDelayed(bleTimeout, 20_000L)
+            updateControls()
+            refreshStatus("BLE keresés folyamatban…")
         } catch (e: SecurityException) {
-            refreshStatus("Nincs Bluetooth-jogosultság: ${e.message}")
+            bleRunning = false
+            updateControls()
+            refreshStatus("Bluetooth-jogosultság hiányzik: ${e.message}")
         } catch (e: Exception) {
-            refreshStatus("Keresési hiba: ${e.message}")
+            bleRunning = false
+            updateControls()
+            refreshStatus("BLE keresési hiba: ${e.message}")
         }
-        handler.postDelayed({ scanButton.isEnabled = true }, 25_500L)
+    }
+
+    private fun beginClassicScan() {
+        val bt = readyAdapter() ?: return
+        stopAllScans(null)
+        try {
+            found.clear()
+            renderDevices()
+            if (bt.isDiscovering) bt.cancelDiscovery()
+            val started = bt.startDiscovery()
+            if (!started) {
+                refreshStatus("A Classic keresést nem sikerült elindítani.")
+                updateControls()
+                return
+            }
+            classicRunning = true
+            handler.postDelayed(classicTimeout, 12_000L)
+            updateControls()
+            refreshStatus("Classic keresés folyamatban… (legfeljebb 12 mp)")
+        } catch (e: SecurityException) {
+            classicRunning = false
+            updateControls()
+            refreshStatus("Bluetooth-jogosultság hiányzik: ${e.message}")
+        } catch (e: Exception) {
+            classicRunning = false
+            updateControls()
+            refreshStatus("Classic keresési hiba: ${e.message}")
+        }
+    }
+
+    private fun stopBleScan() {
+        handler.removeCallbacks(bleTimeout)
+        try { leScanner?.stopScan(leCallback) } catch (_: Exception) { }
+        bleRunning = false
+    }
+
+    private fun stopClassicScan() {
+        handler.removeCallbacks(classicTimeout)
+        try { if (adapter?.isDiscovering == true) adapter?.cancelDiscovery() } catch (_: Exception) { }
+        classicRunning = false
+    }
+
+    private fun stopAllScans(message: String?) {
+        stopBleScan()
+        stopClassicScan()
+        updateControls()
+        if (message != null) {
+            refreshStatus("$message · ${found.size} eszköz")
+            scheduleRender()
+        }
+    }
+
+    private fun updateControls() {
+        if (!::bleButton.isInitialized) return
+        bleButton.isEnabled = !bleRunning && !classicRunning
+        classicButton.isEnabled = !bleRunning && !classicRunning
+        stopButton.isEnabled = bleRunning || classicRunning
     }
 
     private fun addDevice(device: BluetoothDevice, source: String, advertisedName: String? = null) {
         runOnUiThread {
             try {
                 val key = device.address ?: return@runOnUiThread
-                // Prefer a useful advertised/broadcast name, then the system's cached remote name.
                 val systemName = try { device.name } catch (_: SecurityException) { null }
                 val candidateName = advertisedName?.takeIf { it.isNotBlank() }
                     ?: systemName?.takeIf { it.isNotBlank() }
                 val old = found[key]
-                if (old == null) {
-                    found[key] = FoundDevice(device, source, candidateName)
-                } else {
+                if (old == null) found[key] = FoundDevice(device, source, candidateName)
+                else {
                     if (!old.source.contains(source)) old.source += " + $source"
                     if (!candidateName.isNullOrBlank()) old.displayName = candidateName
                 }
-                renderDevices()
+                scheduleRender()
             } catch (_: SecurityException) {
                 refreshStatus("A Bluetooth Connect engedély hiányzik.")
             }
@@ -249,10 +343,10 @@ class MainActivity : Activity() {
     private fun refreshPairedDevices() {
         if (!hasPermissions()) return
         try {
-            adapter?.bondedDevices?.forEach {
-                val name = try { it.name?.takeIf { value -> value.isNotBlank() } } catch (_: SecurityException) { null }
-                val existing = found[it.address]
-                if (existing == null) found[it.address] = FoundDevice(it, "Párosított", name)
+            adapter?.bondedDevices?.forEach { device ->
+                val name = try { device.name?.takeIf { it.isNotBlank() } } catch (_: SecurityException) { null }
+                val existing = found[device.address]
+                if (existing == null) found[device.address] = FoundDevice(device, "Párosított", name)
                 else {
                     existing.displayName = name ?: existing.displayName
                     if (!existing.source.contains("Párosított")) existing.source += " + Párosított"
@@ -267,7 +361,7 @@ class MainActivity : Activity() {
         list.removeAllViews()
         if (found.isEmpty()) {
             list.addView(TextView(this).apply {
-                text = "Még nincs találat. Tedd a billentyűzetet párosítási módba, majd keress újra."
+                text = "Még nincs találat. Indíts BLE vagy Classic keresést."
                 textSize = 12f
                 setTextColor(0xFFBDBDBD.toInt())
                 setPadding(0, dp(8), 0, dp(8))
@@ -289,12 +383,12 @@ class MainActivity : Activity() {
             } catch (_: SecurityException) { "Állapot nem elérhető" }
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(10), dp(9), dp(10), dp(9))
+                setPadding(dp(10), dp(8), dp(10), dp(8))
                 setBackgroundColor(0xFF171717.toInt())
             }
             row.addView(TextView(this).apply {
                 text = name
-                textSize = 14f
+                textSize = 13f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(0xFFFFFFFF.toInt())
             })
@@ -316,7 +410,7 @@ class MainActivity : Activity() {
             }
             row.addView(pair)
             val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            params.bottomMargin = dp(8)
+            params.bottomMargin = dp(7)
             list.addView(row, params)
         }
     }
@@ -327,8 +421,7 @@ class MainActivity : Activity() {
             return
         }
         try {
-            adapter?.cancelDiscovery()
-            leScanner?.stopScan(leCallback)
+            stopAllScans(null)
             val started = device.createBond()
             Toast.makeText(this, if (started) "Párosítási kérés elküldve" else "A párosítás nem indult el", Toast.LENGTH_SHORT).show()
             refreshStatus("Várakozás a rendszer párosítási ablakára…")
@@ -338,13 +431,13 @@ class MainActivity : Activity() {
     }
 
     private fun refreshStatus(message: String) {
-        runOnUiThread { status.text = message }
+        if (::status.isInitialized) status.text = message
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(stopBle)
-        try { leScanner?.stopScan(leCallback) } catch (_: Exception) { }
-        try { adapter?.cancelDiscovery() } catch (_: Exception) { }
+        handler.removeCallbacks(renderRunnable)
+        stopBleScan()
+        stopClassicScan()
         if (receiverRegistered) try { unregisterReceiver(btReceiver) } catch (_: Exception) { }
         super.onDestroy()
     }
