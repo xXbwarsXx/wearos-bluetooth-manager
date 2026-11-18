@@ -8,9 +8,9 @@ A small Wear OS utility that discovers Bluetooth Classic and Bluetooth Low Energ
 - Min SDK: 30
 - Compile SDK: 36
 - Target SDK: 35
-- Version: 1.0.1 (versionCode 2)
+- Version: 1.0.2 (versionCode 3)
 
-## Features in v1.0.1
+## Features in v1.0.2
 - Classic Bluetooth discovery (`BluetoothAdapter.startDiscovery()`)
 - BLE discovery (`BluetoothLeScanner.startScan()`)
 - Combined device list, de-duplicated by Bluetooth address
@@ -61,4 +61,11 @@ directories are included.
 Versioning policy:
 - Every new project release increments `versionCode`.
 - Every release updates `versionName`.
-- v1.0.1 uses versionCode 2 and applicationId `com.wearbluetoothmanager`.
+- v1.0.2 uses versionCode 3 and applicationId `com.wearbluetoothmanager`.
+
+
+## v1.0.2 build fix
+The GitHub Actions Android SDK setup now installs only valid packages:
+`platform-tools`, `platforms;android-36`, and `build-tools;36.0.0`.
+It no longer requests the obsolete SDK package named `tools`, which caused
+`Warning: Failed to find package 'tools'` and stopped the previous build.
