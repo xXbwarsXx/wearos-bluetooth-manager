@@ -4,13 +4,13 @@ A small Wear OS utility that discovers Bluetooth Classic and Bluetooth Low Energ
 
 ## Target device
 - Samsung Galaxy Watch 7 / Wear OS
-- Package: `com.tamas.wearbluetoothmanager`
+- Package: `com.wearbluetoothmanager`
 - Min SDK: 30
 - Compile SDK: 36
 - Target SDK: 35
-- Version: 1.0.0 (versionCode 1)
+- Version: 1.0.1 (versionCode 2)
 
-## Features in v1.0.0
+## Features in v1.0.1
 - Classic Bluetooth discovery (`BluetoothAdapter.startDiscovery()`)
 - BLE discovery (`BluetoothLeScanner.startScan()`)
 - Combined device list, de-duplicated by Bluetooth address
@@ -45,3 +45,20 @@ The workflow installs JDK 17, Android SDK 36 and Gradle 8.13, then builds `:app:
 
 ## Permissions
 The app requests `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT` and `ACCESS_FINE_LOCATION`. Fine location is requested because Android's general discovery APIs may require it; the app does not use location data.
+
+
+## Important: repository root layout
+After extracting this ZIP, upload the *contents* of this folder to the repository root.
+The workflow file must be exactly:
+`.github/workflows/android.yml`
+
+Do not put the project inside an extra `WearBluetoothManager/` folder in the repository.
+If GitHub's web upload interface hides `.github`, create the workflow file directly on GitHub
+using **Add file → Create new file**, enter `.github/workflows/android.yml`, and paste
+the contents of the included workflow file. Alternatively, use Git from a terminal so hidden
+directories are included.
+
+Versioning policy:
+- Every new project release increments `versionCode`.
+- Every release updates `versionName`.
+- v1.0.1 uses versionCode 2 and applicationId `com.wearbluetoothmanager`.
