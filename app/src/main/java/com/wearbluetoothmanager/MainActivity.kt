@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -152,7 +153,7 @@ class MainActivity : Activity() {
             addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
         }
         if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(btReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            registerReceiver(btReceiver, filter, Context.RECEIVER_EXPORTED)
         } else {
             @Suppress("DEPRECATION")
             registerReceiver(btReceiver, filter)
@@ -204,16 +205,23 @@ class MainActivity : Activity() {
             if (bt.isDiscovering) bt.cancelDiscovery()
             val classicStarted = bt.startDiscovery()
             leScanner = bt.bluetoothLeScanner
-            leScanner?.startScan(leCallback)
+            val scanSettings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+                .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
+                .setNumOfMatches(ScanSettings.MATCH_NUM_MAX_ADVERTISEMENT)
+                .setReportDelay(0L)
+                .build()
+            leScanner?.startScan(null, scanSettings, leCallback)
             handler.removeCallbacks(stopBle)
-            handler.postDelayed(stopBle, 15_000L)
+            handler.postDelayed(stopBle, 25_000L)
             if (!classicStarted) refreshStatus("BLE keresés fut; Classic keresés nem indult el.")
         } catch (e: SecurityException) {
             refreshStatus("Nincs Bluetooth-jogosultság: ${e.message}")
         } catch (e: Exception) {
             refreshStatus("Keresési hiba: ${e.message}")
         }
-        handler.postDelayed({ scanButton.isEnabled = true }, 15_500L)
+        handler.postDelayed({ scanButton.isEnabled = true }, 25_500L)
     }
 
     private fun addDevice(device: BluetoothDevice, source: String, advertisedName: String? = null) {
